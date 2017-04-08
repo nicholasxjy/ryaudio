@@ -2,7 +2,7 @@
   <div class="ryaudio">
     <div class="ryaudio-body">
       <div class="ryaudio-container" :style="`width: ${width}px;`">
-        <audio :src="src" preload="true" ref="audio">
+        <audio preload="auto" ref="audio">
           <p>we believe you need to upgrade your browser :)</p>
         </audio>
         <div class="ryaudio-controls">
@@ -15,9 +15,10 @@
               <div class="ryaudio-title">{{title}}</div>
               <div class="ryaudio-controls-content-main">
                 <span class="ryaudio-controls-currenttime">{{currentTime}}</span>
-                <div class="ryaudio-progress" ref="progress">
-                  <span class="ryaudio-progress-active" @click="setBackTo" :style="{width: activeProgress + '%'}"></span>
-                  <input type="range" class="ryaudio-progress-bar" min="0" :max="progressMax" value="0" ref="slider" v-model="progressValue">
+                <div class="ryaudio-progress">
+                  <span class="ryaudio-progress-active" @click="setBackTo" :style="{width: activeProgress + 'px'}"></span>
+                  <div class="ryaudio-progress-bar" ref="progress" @click="setBackTo"></div>
+                  <span class="ryaudio-progress-slider" ref="slider" :style="{left: sliderLeft + 'px'}" @touchstart="handleSliderDown" @mousedown="handleSliderDown"></span>
                 </div>
                 <span class="ryaudio-duration">{{duration}}</span>
               </div>
@@ -53,30 +54,20 @@
       return {
         currentTime: '00:00',
         duration: '00:00',
-        progressValue: 0,
-        isPlaying: false,
-        progressMax: 0
-      }
-    },
-    watch: {
-      progressValue(val) {
-        const audioEle = this.$refs.audio
-        if (parseInt(val) !== parseInt(audioEle.currentTime)) {
-          audioEle.currentTime = val
-        }
+        activeProgress: 0,
+        sliderLeft: 0,
+        isPlaying: false
       }
     },
     mounted() {
       const audioEle = this.$refs.audio
 
-      audioEle.addEventListener('loadeddata', () => {
-        this.progressMax = parseInt(audioEle.duration)
-        this.duration = this.formatTime(audioEle.duration)
-      })
-      audioEle.addEventListener('timeupdate', () => {
-        this.currentTime = this.formatTime(audioEle.currentTime)
-        this.progressValue = audioEle.currentTime
-      })
+      audioEle.src = this.src
+      audioEle.preload = 'auto'
+
+      audioEle.addEventListener('loadeddata', this.handleLoadedData, false)
+      audioEle.addEventListener('timeupdate', this.handleTimeUpdate, false)
+
       audioEle.addEventListener('play', () => {
         if (!this.isPlaying) {
           this.isPlaying = true
@@ -88,13 +79,11 @@
         }
       })
     },
-    computed: {
-      activeProgress() {
-        if (parseFloat(this.progressValue / this.progressMax) * 100 > 100) {
-          return 100
-        }
-        return parseFloat(this.progressValue / this.progressMax) * 100
-      }
+    beforeDestroy() {
+      document.removeEventListener('mouseup', this.handleSliderUp, false)
+      document.removeEventListener('touchend', this.handleSliderUp, false)
+      document.removeEventListener('mousemove', this.handleSliderMove, false)
+      document.removeEventListener('touchmove', this.handleSliderMove, false)
     },
     methods: {
       onAudioPlay() {
@@ -121,12 +110,72 @@
         mins = `0${mins}`.slice(-2)
         return `${mins}:${secs}`
       },
+      calculateSliderLeft() {
+        const sliderEle = this.$refs.slider
+        if (sliderEle) {
+          const sliderRect = sliderEle.getBoundingClientRect()
+          if (this.activeProgress > sliderRect.width / 2) {
+            return this.activeProgress - sliderRect.width / 2
+          }
+        }
+        return 0
+      },
       setBackTo(e) {
         const offsetX = e.offsetX
         const progressEle = this.$refs.progress
         const audioEle = this.$refs.audio
         const rect = progressEle.getBoundingClientRect()
         audioEle.currentTime = parseFloat(offsetX / rect.width) * audioEle.duration
+      },
+      handleLoadedData() {
+        const audioEle = this.$refs.audio
+        this.duration = this.formatTime(audioEle.duration)
+      },
+      handleTimeUpdate() {
+        const audioEle = this.$refs.audio
+        const progressEle = this.$refs.progress
+        const progressRect = progressEle.getBoundingClientRect()
+        const currentTime = audioEle.currentTime
+        const duration = audioEle.duration
+        this.activeProgress = parseFloat(currentTime / duration) * progressRect.width
+        this.sliderLeft = this.calculateSliderLeft()
+        this.currentTime = this.formatTime(currentTime)
+      },
+      handleSliderDown() {
+        // here need to bind the mousemove touchmove to document
+        document.addEventListener('mousemove', this.handleSliderMove, false)
+        document.addEventListener('touchmove', this.handleSliderMove, false)
+
+        // add remove listener
+        document.addEventListener('mouseup', this.handleSliderUp, false)
+        document.addEventListener('touchend', this.handleSliderUp, false)
+      },
+      handleSliderUp() {
+        document.removeEventListener('mousemove', this.handleSliderMove, false)
+        document.removeEventListener('touchmove', this.handleSliderMove, false)
+      },
+      handleSliderMove(e) {
+        // here should handle mouse and touch type events
+        let pageX
+        if (e.type === 'mousemove') {
+          pageX = e.pageX
+        }
+        if (e.type === 'touchmove') {
+          pageX = e.touches[0].pageX
+        }
+        const audioEle = this.$refs.audio
+        const progressEle = this.$refs.progress
+        const rect = progressEle.getBoundingClientRect()
+        let offset = pageX - rect.left
+        if (offset < 0) {
+          offset = 0
+        }
+        if (offset > rect.width) {
+          offset = rect.width
+        }
+        this.activeProgress = offset
+        this.sliderLeft = this.calculateSliderLeft()
+        audioEle.currentTime = parseFloat(offset / rect.width) * audioEle.duration
       }
     }
   }
@@ -193,6 +242,7 @@
   padding-left: 10px;
   padding-right: 10px;
   color: #4a4a4a;
+  width: 35px;
 }
 .ryaudio-progress {
   flex: 1 1;
@@ -200,90 +250,40 @@
   align-items: center;
   position: relative;
   z-index: 1200;
-  .ryaudio-progress-active {
-    position: absolute;
-    left: 0;
-    z-index: 1300;
-    height: 2px;
-    background-color: #1478F0;
-    cursor: pointer;
-  }
-  input[type=range] {
-    -webkit-appearance: none;
-    width: 100%;
-    background: #d2d2d2;
-    height: 2px;
-    margin: 0;
-    padding: 0;
-  }
-
-  input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-  }
-
-  input[type=range]:focus {
-    outline: none;
-  }
-
-  input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    height: 15px;
-    width: 15px;
-    border: 1px solid #0078eb;
-    box-shadow: 0 0 3px #0078eb;
-    border-radius: 50%;
-    background: #ffffff;
-    cursor: pointer;
-    margin-top: -7px;
-    position: relative;
-    z-index: 1400;
-  }
-  input[type=range]::-moz-range-thumb {
-    height: 15px;
-    width: 15px;
-    border-radius: 50%;
-    background: #ffffff;
-    cursor: pointer;
-    margin-top: -7px;
-    position: relative;
-    z-index: 1400;
-    border: 1px solid #0078eb;
-    box-shadow: 0 0 3px #0078eb;
-  }
-  input[type=range]::-ms-thumb {
-    height: 15px;
-    width: 15px;
-    border-radius: 50%;
-    background: #ffffff;
-    cursor: pointer;
-    margin-top: -7px;
-    position: relative;
-    z-index: 1400;
-    border: 1px solid #0078eb;
-    box-shadow: 0 0 3px #0078eb;
-  }
-
-  input[type=range]::-webkit-slider-runnable-track {
-    width: 100%;
-    height: 2px;
-    cursor: pointer;
-    background: #d2d2d2;
-  }
-  input[type=range]:focus::-webkit-slider-runnable-track {
-    background: #d2d2d2;
-  }
-  input[type=range]::-moz-range-track {
-    width: 100%;
-    height: 2px;
-    cursor: pointer;
-    background: #d2d2d2;
-  }
-  input[type=range]::-ms-track {
-    width: 100%;
-    height: 2px;
-    cursor: pointer;
-    background: #d2d2d2;
-    color: transparent;
-  }
+  height: 20px;
+}
+.ryaudio-progress-active {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 1300;
+  height: 2px;
+  background-color: #1478F0;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+.ryaudio-progress-bar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  background-color: #d2d2d2;
+  width: 100%;
+  z-index: 1250;
+  cursor: pointer;
+}
+.ryaudio-progress-slider {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #fff;
+  border: 1px solid #2772DB;
+  transform: translateY(-50%);
+  z-index: 1400;
 }
 </style>
